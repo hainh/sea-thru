@@ -10,6 +10,7 @@ from PIL import Image
 import rawpy
 import matplotlib
 from matplotlib import pyplot as plt
+from skimage import exposure
 from skimage.restoration import denoise_bilateral
 from skimage.morphology import closing, opening, erosion, dilation, disk, diamond, square
 
@@ -21,8 +22,9 @@ by partitioning the image into different depth
 ranges and taking the darkest RGB triplets 
 from that set as estimations of the backscatter
 '''
-def find_backscatter_estimation_points(img, depths, num_bins=10, fraction=0.01, max_vals=20, min_depth=0.0):
+def find_backscatter_estimation_points(img, depths, num_bins=10, fraction=0.01, max_vals=20, min_depth_percent=0.0):
     z_max, z_min = np.max(depths), np.min(depths)
+    min_depth = z_min + (min_depth_percent * (z_max - z_min))
     z_ranges = np.linspace(z_min, z_max, num_bins + 1)
     img_norms = np.mean(img, axis=2)
     points_r = []
@@ -110,8 +112,10 @@ def calculate_beta_D(depths, a, b, c, d):
 Estimate coefficients for the 2-term exponential
 describing the wideband attenuation
 '''
-def refine_wideband_attentuation(depths, illum, estimation, restarts=25, min_depth = 0.1):
+def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_depth_percent = 0.001):
     eps = 1E-8
+    z_max, z_min = np.max(depths), np.min(depths)
+    min_depth = z_min + (min_depth_percent * (z_max - z_min))
     coefs = None
     best_loss = np.inf
     locs = np.where(np.logical_and(depths > min_depth, estimation > eps))
@@ -198,8 +202,8 @@ def construct_neighborhood_map(depths, epsilon=0.05):
                         q.append((x2, y2))
         n_neighborhoods += 1
     zeros_size_arr = sorted(zip(*np.unique(nmap[depths == 0], return_counts=True)), key=lambda x: x[1], reverse=True)
-    nmap[nmap == zeros_size_arr[0][0]] = 0 #reset largest background to 0
-
+    if len(zeros_size_arr) > 0:
+        nmap[nmap == zeros_size_arr[0][0]] = 0 #reset largest background to 0
     return nmap, n_neighborhoods - 1
 
 '''
@@ -298,19 +302,24 @@ def wbalance_10p(img):
 def scale(img):
     return (img - np.min(img)) / (np.max(img) - np.min(img))
 
-def run_pipeline(img, depths, output_graphs=False):
+def run_pipeline(img, depths, args):
+    if args.output_graphs:
+        plt.imshow(depths)
+        plt.title('Depth Map')
+        plt.show()
 
     print('Estimating backscatter...', flush=True)
-    ptsR, ptsG, ptsB = find_backscatter_estimation_points(img, depths, fraction=0.01, min_depth=1.5)
+    ptsR, ptsG, ptsB = find_backscatter_estimation_points(img, depths, fraction=0.01, min_depth_percent=args.min_depth)
 
     print('Finding backscatter coefficients...', flush=True)
-    Br, coefsR = find_backscatter_values(ptsR, depths, restarts=100)
-    Bg, coefsG = find_backscatter_values(ptsG, depths, restarts=100)
-    Bb, coefsB = find_backscatter_values(ptsB, depths, restarts=100)
-    print('Coefficients: \n{}\n{}\n{}'.format(coefsR, coefsG, coefsB), flush=True)
+    Br, coefsR = find_backscatter_values(ptsR, depths, restarts=25)
+    Bg, coefsG = find_backscatter_values(ptsG, depths, restarts=25)
+    Bb, coefsB = find_backscatter_values(ptsB, depths, restarts=25)
 
-    if output_graphs:
+    if args.output_graphs:
+        print('Coefficients: \n{}\n{}\n{}'.format(coefsR, coefsG, coefsB), flush=True)
         # check optimization for B channel
+        plt.clf()
         plt.scatter(ptsB[:, 0].ravel(), ptsB[:, 1].ravel(), c='b')
         xs = np.linspace(np.min(ptsB[:, 0]), np.max(ptsB[:, 0]), 1000)
         ys = np.array([((coefsB[0] * (1 - np.exp(-coefsB[1] * x))) + (coefsB[2] * np.exp(-coefsB[3] * x))) for x in xs])
@@ -339,9 +348,9 @@ def run_pipeline(img, depths, output_graphs=False):
     nmap, n = refine_neighborhood_map(nmap, 10)
 
     print('Estimating illumination...', flush=True)
-    illR = estimate_illumination(img[:, :, 0], Br, nmap, n, p=0.01, max_iters=100, tol=1E-5, f=4.0)
-    illG = estimate_illumination(img[:, :, 1], Bg, nmap, n, p=0.01, max_iters=100, tol=1E-5, f=4.0)
-    illB = estimate_illumination(img[:, :, 2], Bb, nmap, n, p=0.01, max_iters=100, tol=1E-5, f=4.0)
+    illR = estimate_illumination(img[:, :, 0], Br, nmap, n, p=args.p, max_iters=100, tol=1E-5, f=args.f)
+    illG = estimate_illumination(img[:, :, 1], Bg, nmap, n, p=args.p, max_iters=100, tol=1E-5, f=args.f)
+    illB = estimate_illumination(img[:, :, 2], Bb, nmap, n, p=args.p, max_iters=100, tol=1E-5, f=args.f)
     ill = np.stack([illR, illG, illB], axis=2)
 
     print('Estimating wideband attenuation...', flush=True)
@@ -352,7 +361,7 @@ def run_pipeline(img, depths, output_graphs=False):
     beta_D_b, _ = estimate_wideband_attentuation(depths, illB)
     refined_beta_D_b, coefsB = refine_wideband_attentuation(depths, illB, beta_D_b)
 
-    if output_graphs:
+    if args.output_graphs:
         print('Coefficients: \n{}\n{}\n{}'.format(coefsR, coefsG, coefsB), flush=True)
         # plot the wideband attenuation values
         plt.clf()
@@ -366,7 +375,7 @@ def run_pipeline(img, depths, output_graphs=False):
         plt.show()
 
     # check optimization for beta_D channel
-    if output_graphs:
+    if args.output_graphs:
         eps = 1E-5
         locs = np.where(
             np.logical_and(beta_D_r > eps, np.logical_and(beta_D_g > eps, np.logical_and(depths > eps, beta_D_b > eps))))
@@ -391,14 +400,12 @@ def run_pipeline(img, depths, output_graphs=False):
     beta_D = np.stack([refined_beta_D_r, refined_beta_D_g, refined_beta_D_b], axis=2)
     recovered = recover_image(img, depths, B, beta_D, nmap)
 
-    if output_graphs:
+    if args.output_graphs:
         beta_D = (beta_D - np.min(beta_D)) / (np.max(beta_D) - np.min(beta_D))
         fig = plt.figure(figsize=(50, 20))
         fig.add_subplot(2, 3, 1)
         plt.imshow(img)
         plt.title('Original Image')
-        # plt.imshow(depths)
-        # plt.title('Depth Map')
         fig.add_subplot(2, 3, 2)
         plt.imshow(nmap)
         plt.title('Neighborhood Map')
@@ -420,10 +427,29 @@ def run_pipeline(img, depths, output_graphs=False):
 
     return recovered
 
+def preprocess_for_monodepth(img_fname, output_fname):
+    img = np.array(Image.fromarray(rawpy.imread(img_fname).postprocess()))
+    img_adapteq = exposure.equalize_adapthist(img, clip_limit=0.03)
+    plt.imsave(output_fname, img_adapteq)
 
 if __name__ == '__main__':
-    print('Loading image...', flush=True)
-    img, depths = load_image_and_depth_map('data/D5/Raw/LFT_3396.NEF', 'data/D5/depthMaps/depthLFT_3396.tif', 320)
-    recovered = run_pipeline(img, depths, False)
-    plt.imsave('output.png', recovered)
-    print('Done.')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--image', required=True, help='Input image')
+    parser.add_argument('--depth-map', required=True, help='Input depth map')
+    parser.add_argument('--output', default='output.png', help='Output filename')
+    parser.add_argument('--f', type=float, default=2.0, help='f value (controls brightness)')
+    parser.add_argument('--p', type=float, default=0.01, help='p value (controls locality of illuminant map)')
+    parser.add_argument('--min-depth', type=float, default=0.1, help='Minimum depth value to use in estimations (range 0-1)')
+    parser.add_argument('--size', type=int, default=320, help='Size to output')
+    parser.add_argument('--output-graphs', action='store_true', help='Output graphs')
+    parser.add_argument('--preprocess', action='store_true', help='Preprocess for monodepth')
+    args = parser.parse_args()
+
+    if args.preprocess:
+        preprocess_for_monodepth(args.image, args.output)
+    else:
+        print('Loading image...', flush=True)
+        img, depths = load_image_and_depth_map(args.image, args.depth_map, args.size)
+        recovered = run_pipeline(img, depths, args)
+        plt.imsave(args.output, recovered)
+        print('Done.')
