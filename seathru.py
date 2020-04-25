@@ -110,45 +110,20 @@ def calculate_beta_D(depths, a, b, c, d):
 Estimate coefficients for the 2-term exponential
 describing the wideband attenuation
 '''
-# def refine_wideband_attentuation(depths, illum, estimation, radius = 6, restarts=10):
-#     eps = 1E-5
-#     coefs = None
-#     best_loss = np.inf
-#     locs = np.where(np.logical_and(depths > eps, illum > eps))
-#     def calculate_reconstructed_depths(depths, illum, a, b, c, d):
-#         eps = 1E-5
-#         res = -np.log(illum + eps) / (calculate_beta_D(depths, a, b, c, d) + eps)
-#         return res
-#     def opt_f(depths, a, b, c, d):
-#         return calculate_reconstructed_depths(depths[locs], illum[locs], a, b, c, d)
-#     def loss(a, b, c, d):
-#         return np.linalg.norm(depths[locs] - calculate_reconstructed_depths(depths[locs], illum[locs], a, b, c, d))
-#     for _ in range(restarts):
-#         try:
-#             optp, pcov = sp.optimize.curve_fit(
-#                 f=opt_f,
-#                 xdata=depths,
-#                 ydata=depths[locs],
-#                 p0=np.abs(np.random.random(4)) * np.array([1., -1., 1., -1.]),
-#                 bounds=([0, None, 0, None], [None, 0, None, 0]))
-#             l = loss(*optp)
-#             if l < best_loss:
-#                 best_loss = l
-#                 coefs = optp
-#         except RuntimeError as re:
-#             print(re, file=sys.stderr)
-#     BD = calculate_beta_D(depths, *coefs) * np.where(np.logical_and(depths > eps, illum > eps), 1, 0)
-#     return BD, coefs
-
-def refine_wideband_attentuation(depths, illum, estimation, restarts=3, min_depth = 1.5):
+def refine_wideband_attentuation(depths, illum, estimation, restarts=25, min_depth = 0.1):
     eps = 1E-8
     coefs = None
     best_loss = np.inf
     locs = np.where(np.logical_and(depths > min_depth, estimation > eps))
     def opt_f(depths, a, b, c, d):
         return ((a * np.exp(b * depths)) + (c * np.exp(d * depths)) + eps)
+    def calculate_reconstructed_depths(depths, illum, a, b, c, d):
+        eps = 1E-5
+        res = -np.log(illum + eps) / (calculate_beta_D(depths, a, b, c, d) + eps)
+        return res
     def loss(a, b, c, d):
-        return np.linalg.norm(estimation[locs] - opt_f(depths[locs], a, b, c, d))
+        # return np.linalg.norm(estimation[locs] - opt_f(depths[locs], a, b, c, d))
+        return np.linalg.norm(depths[locs] - calculate_reconstructed_depths(depths[locs], illum[locs], a, b, c, d))
     for _ in range(restarts):
         try:
             optp, pcov = sp.optimize.curve_fit(
@@ -174,7 +149,7 @@ def recover_image(img, depths, B, beta_D, nmap):
     res = (img - B) * np.exp(beta_D * np.expand_dims(depths, axis=2))
     res = np.maximum(0.0, np.minimum(1.0, res))
     res[nmap == 0] = img[nmap == 0]
-    return wbalance_10p(res)
+    return scale(wbalance_10p(res))
 
 '''
 Reconstruct the scene and globally white balance
@@ -184,7 +159,7 @@ def recover_image_S4(img, B, illum, nmap):
     res = (img - B) / (illum + eps)
     res = np.maximum(0.0, np.minimum(1.0, res))
     res[nmap == 0] = img[nmap == 0]
-    return wbalance_10p(res)
+    return scale(wbalance_10p(res))
 
 
 '''
@@ -323,11 +298,7 @@ def wbalance_10p(img):
 def scale(img):
     return (img - np.min(img)) / (np.max(img) - np.min(img))
 
-if __name__ == '__main__':
-    # depths = np.random.random((50, 50))
-    # img = np.random.random((50, 50, 3))
-    print('Loading image...', flush=True)
-    img, depths = load_image_and_depth_map('data/D5/Raw/LFT_3396.NEF', 'data/D5/depthMaps/depthLFT_3396.tif', 320)
+def run_pipeline(img, depths, output_graphs=False):
 
     print('Estimating backscatter...', flush=True)
     ptsR, ptsG, ptsB = find_backscatter_estimation_points(img, depths, fraction=0.01, min_depth=1.5)
@@ -338,27 +309,28 @@ if __name__ == '__main__':
     Bb, coefsB = find_backscatter_values(ptsB, depths, restarts=100)
     print('Coefficients: \n{}\n{}\n{}'.format(coefsR, coefsG, coefsB), flush=True)
 
-    # check optimization for B channel
-    plt.scatter(ptsB[:, 0].ravel(), ptsB[:, 1].ravel(), c='b')
-    xs = np.linspace(np.min(ptsB[:, 0]), np.max(ptsB[:, 0]), 1000)
-    ys = np.array([((coefsB[0] * (1 - np.exp(-coefsB[1] * x))) + (coefsB[2] * np.exp(-coefsB[3] * x))) for x in xs])
-    # ys = find_backscatter_values(ptsB, xs)
-    plt.plot(xs.ravel(), ys.ravel(), c='b')
-    plt.scatter(ptsG[:, 0].ravel(), ptsG[:, 1].ravel(), c='g')
-    xs = np.linspace(np.min(ptsG[:, 0]), np.max(ptsG[:, 0]), 1000)
-    ys = np.array([((coefsG[0] * (1 - np.exp(-coefsG[1] * x))) + (coefsG[2] * np.exp(-coefsG[3] * x))) for x in xs])
-    # ys = find_backscatter_values(ptsG, xs)
-    plt.plot(xs.ravel(), ys.ravel(), c='g')
-    plt.scatter(ptsR[:, 0].ravel(), ptsR[:, 1].ravel(), c='r')
-    xs = np.linspace(np.min(ptsR[:, 0]), np.max(ptsR[:, 0]), 1000)
-    ys = np.array([((coefsR[0] * (1 - np.exp(-coefsR[1] * x))) + (coefsR[2] * np.exp(-coefsR[3] * x))) for x in xs])
-    # ys = find_backscatter_values(ptsR, xs)
-    plt.plot(xs.ravel(), ys.ravel(), c='r')
-    plt.xlabel('Depth (m)')
-    plt.ylabel('Color value')
-    plt.title('Modelled $B_c$ values')
-    plt.savefig('Bc_values.png')
-    plt.show()
+    if output_graphs:
+        # check optimization for B channel
+        plt.scatter(ptsB[:, 0].ravel(), ptsB[:, 1].ravel(), c='b')
+        xs = np.linspace(np.min(ptsB[:, 0]), np.max(ptsB[:, 0]), 1000)
+        ys = np.array([((coefsB[0] * (1 - np.exp(-coefsB[1] * x))) + (coefsB[2] * np.exp(-coefsB[3] * x))) for x in xs])
+        # ys = find_backscatter_values(ptsB, xs)
+        plt.plot(xs.ravel(), ys.ravel(), c='b')
+        plt.scatter(ptsG[:, 0].ravel(), ptsG[:, 1].ravel(), c='g')
+        xs = np.linspace(np.min(ptsG[:, 0]), np.max(ptsG[:, 0]), 1000)
+        ys = np.array([((coefsG[0] * (1 - np.exp(-coefsG[1] * x))) + (coefsG[2] * np.exp(-coefsG[3] * x))) for x in xs])
+        # ys = find_backscatter_values(ptsG, xs)
+        plt.plot(xs.ravel(), ys.ravel(), c='g')
+        plt.scatter(ptsR[:, 0].ravel(), ptsR[:, 1].ravel(), c='r')
+        xs = np.linspace(np.min(ptsR[:, 0]), np.max(ptsR[:, 0]), 1000)
+        ys = np.array([((coefsR[0] * (1 - np.exp(-coefsR[1] * x))) + (coefsR[2] * np.exp(-coefsR[3] * x))) for x in xs])
+        # ys = find_backscatter_values(ptsR, xs)
+        plt.plot(xs.ravel(), ys.ravel(), c='r')
+        plt.xlabel('Depth (m)')
+        plt.ylabel('Color value')
+        plt.title('Modelled $B_c$ values')
+        plt.savefig('Bc_values.png')
+        plt.show()
 
     print('Constructing neighborhood map...', flush=True)
     nmap, _ = construct_neighborhood_map(depths, 0.01)
@@ -374,71 +346,84 @@ if __name__ == '__main__':
 
     print('Estimating wideband attenuation...', flush=True)
     beta_D_r, _ = estimate_wideband_attentuation(depths, illR)
-    beta_D_r, coefsR = refine_wideband_attentuation(depths, illR, beta_D_r)
+    refined_beta_D_r, coefsR = refine_wideband_attentuation(depths, illR, beta_D_r)
     beta_D_g, _ = estimate_wideband_attentuation(depths, illG)
-    beta_D_g, coefsG = refine_wideband_attentuation(depths, illG, beta_D_g)
+    refined_beta_D_g, coefsG = refine_wideband_attentuation(depths, illG, beta_D_g)
     beta_D_b, _ = estimate_wideband_attentuation(depths, illB)
-    beta_D_b, coefsB = refine_wideband_attentuation(depths, illB, beta_D_b)
+    refined_beta_D_b, coefsB = refine_wideband_attentuation(depths, illB, beta_D_b)
 
-    print('Coefficients: \n{}\n{}\n{}'.format(coefsR, coefsG, coefsB), flush=True)
-
-    #plot the wideband attenuation values
-    plt.clf()
-    plt.imshow(np.stack([scale(beta_D_r), np.zeros_like(beta_D_r), np.zeros_like(beta_D_r)], axis=2))
-    plt.show()
-    plt.clf()
-    plt.imshow(np.stack([np.zeros_like(beta_D_r), scale(beta_D_g), np.zeros_like(beta_D_r)], axis=2))
-    plt.show()
-    plt.clf()
-    plt.imshow(np.stack([np.zeros_like(beta_D_r), np.zeros_like(beta_D_r), scale(beta_D_b)], axis=2))
-    plt.show()
+    if output_graphs:
+        print('Coefficients: \n{}\n{}\n{}'.format(coefsR, coefsG, coefsB), flush=True)
+        # plot the wideband attenuation values
+        plt.clf()
+        plt.imshow(np.stack([scale(refined_beta_D_r), np.zeros_like(beta_D_r), np.zeros_like(beta_D_r)], axis=2))
+        plt.show()
+        plt.clf()
+        plt.imshow(np.stack([np.zeros_like(beta_D_r), scale(refined_beta_D_g), np.zeros_like(beta_D_r)], axis=2))
+        plt.show()
+        plt.clf()
+        plt.imshow(np.stack([np.zeros_like(beta_D_r), np.zeros_like(beta_D_r), scale(refined_beta_D_b)], axis=2))
+        plt.show()
 
     # check optimization for beta_D channel
-    eps = 1E-5
-    locs = np.where(np.logical_and(beta_D_r > eps, np.logical_and(beta_D_g > eps, np.logical_and(depths > eps, beta_D_b > eps))))
-    plt.scatter(depths[locs].ravel(), beta_D_b[locs].ravel(), c='b')
-    xs = np.linspace(np.min(depths[locs]), np.max(depths[locs]), 1000)
-    ys = np.array([((coefsB[0] * np.exp(coefsB[1] * x)) + (coefsB[2] * np.exp(coefsB[3] * x))) for x in xs])
-    plt.plot(xs.ravel(), ys.ravel(), c='b')
-    plt.scatter(depths[locs].ravel(), beta_D_g[locs].ravel(), c='g')
-    ys = np.array([((coefsG[0] * np.exp(coefsG[1] * x)) + (coefsG[2] * np.exp(coefsG[3] * x))) for x in xs])
-    plt.plot(xs.ravel(), ys.ravel(), c='g')
-    plt.scatter(depths[locs].ravel(), beta_D_r[locs].ravel(), c='r')
-    ys = np.array([((coefsR[0] * np.exp(coefsR[1] * x)) + (coefsR[2] * np.exp(coefsR[3] * x))) for x in xs])
-    plt.plot(xs.ravel(), ys.ravel(), c='r')
-    plt.xlabel('Depth (m)')
-    plt.ylabel('$\\beta^D$')
-    plt.title('Modelled $\\beta^D$ values')
-    plt.savefig('betaD_values.png')
-    plt.show()
+    if output_graphs:
+        eps = 1E-5
+        locs = np.where(
+            np.logical_and(beta_D_r > eps, np.logical_and(beta_D_g > eps, np.logical_and(depths > eps, beta_D_b > eps))))
+        plt.scatter(depths[locs].ravel(), beta_D_b[locs].ravel(), c='b')
+        xs = np.linspace(np.min(depths[locs]), np.max(depths[locs]), 1000)
+        ys = np.array([((coefsB[0] * np.exp(coefsB[1] * x)) + (coefsB[2] * np.exp(coefsB[3] * x))) for x in xs])
+        plt.plot(xs.ravel(), ys.ravel(), c='b')
+        plt.scatter(depths[locs].ravel(), beta_D_g[locs].ravel(), c='g')
+        ys = np.array([((coefsG[0] * np.exp(coefsG[1] * x)) + (coefsG[2] * np.exp(coefsG[3] * x))) for x in xs])
+        plt.plot(xs.ravel(), ys.ravel(), c='g')
+        plt.scatter(depths[locs].ravel(), beta_D_r[locs].ravel(), c='r')
+        ys = np.array([((coefsR[0] * np.exp(coefsR[1] * x)) + (coefsR[2] * np.exp(coefsR[3] * x))) for x in xs])
+        plt.plot(xs.ravel(), ys.ravel(), c='r')
+        plt.xlabel('Depth (m)')
+        plt.ylabel('$\\beta^D$')
+        plt.title('Modelled $\\beta^D$ values')
+        plt.savefig('betaD_values.png')
+        plt.show()
 
     print('Reconstructing image...', flush=True)
     B = np.stack([Br, Bg, Bb], axis=2)
-    beta_D = np.stack([beta_D_r, beta_D_g, beta_D_b], axis=2)
+    beta_D = np.stack([refined_beta_D_r, refined_beta_D_g, refined_beta_D_b], axis=2)
     recovered = recover_image(img, depths, B, beta_D, nmap)
 
-    beta_D = (beta_D - np.min(beta_D)) / (np.max(beta_D) - np.min(beta_D))
-    fig = plt.figure(figsize=(50,20))
-    fig.add_subplot(2, 3, 1)
-    plt.imshow(img)
-    plt.title('Original Image')
-    # plt.imshow(depths)
-    # plt.title('Depth Map')
-    fig.add_subplot(2, 3, 2)
-    plt.imshow(nmap)
-    plt.title('Neighborhood Map')
-    fig.add_subplot(2, 3, 3)
-    plt.imshow(B)
-    plt.title('Backscatter Estimation')
-    fig.add_subplot(2, 3, 4)
-    plt.imshow(ill)
-    plt.title('Illumination Map')
-    fig.add_subplot(2, 3, 5)
-    plt.imshow(beta_D)
-    plt.title('Attenuation Coefficients')
-    fig.add_subplot(2, 3, 6)
-    plt.imshow(recovered)
-    plt.title('Recovered Image')
-    plt.tight_layout(True)
-    plt.savefig('output.png')
-    plt.show()
+    if output_graphs:
+        beta_D = (beta_D - np.min(beta_D)) / (np.max(beta_D) - np.min(beta_D))
+        fig = plt.figure(figsize=(50, 20))
+        fig.add_subplot(2, 3, 1)
+        plt.imshow(img)
+        plt.title('Original Image')
+        # plt.imshow(depths)
+        # plt.title('Depth Map')
+        fig.add_subplot(2, 3, 2)
+        plt.imshow(nmap)
+        plt.title('Neighborhood Map')
+        fig.add_subplot(2, 3, 3)
+        plt.imshow(B)
+        plt.title('Backscatter Estimation')
+        fig.add_subplot(2, 3, 4)
+        plt.imshow(ill)
+        plt.title('Illumination Map')
+        fig.add_subplot(2, 3, 5)
+        plt.imshow(beta_D)
+        plt.title('Attenuation Coefficients')
+        fig.add_subplot(2, 3, 6)
+        plt.imshow(recovered)
+        plt.title('Recovered Image')
+        plt.tight_layout(True)
+        plt.savefig('components.png')
+        plt.show()
+
+    return recovered
+
+
+if __name__ == '__main__':
+    print('Loading image...', flush=True)
+    img, depths = load_image_and_depth_map('data/D5/Raw/LFT_3396.NEF', 'data/D5/depthMaps/depthLFT_3396.tif', 320)
+    recovered = run_pipeline(img, depths, False)
+    plt.imsave('output.png', recovered)
+    print('Done.')
