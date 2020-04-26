@@ -1,0 +1,227 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{times,epsfig,graphicx,amsmath,amssymb}
+\usepackage[breaklinks=true,colorlinks=true,bookmarks=false]{hyperref}
+\date{}
+
+%%%%%%%%%%%%%%%%
+
+\title{Improving Sea-Thru With Monocular Depth Estimation Methods}
+
+\author{%
+John Gibson\\
+{\tt johngibson@wustl.edu}
+}
+
+
+\begin{document}
+\maketitle
+
+\begin{center}\textbf{Abstract}\\~\\\parbox{0.475\textwidth}{\em
+    % Abstract goes here
+
+    A recent advance in underwater imaging is the Sea-Thru method,
+    which uses a physical model of light attenuation to reconstruct
+    the colors in an underwater scene. This method utilizes a known
+    range map to estimate backscatter and wideband attenuation
+    coefficients. This range map is generated using structure-from-motion (SFM),
+    which requires multiple underwater images from various perspectives and
+    long processing time. In addition, SFM gives very accurate results, which are
+    generally not required for this method. In this work, we implement and
+    extend Sea-Thru to take advantage of convolutional monocular depth
+    estimation methods, specifically the Monodepth2 network. We obtain
+    satisfactory results with the lower-quality depth estimates with
+    some color inconsistencies using only one image.
+
+}\end{center}
+
+\section{Introduction}
+
+%\begin{figure}[!t]
+%\begin{center}
+%\fbox{\rule{0pt}{3in} \rule{0.9\linewidth}{0pt}} % Place holder, replace with \includegraphics, etc.
+%\end{center}
+%   \caption{Example of caption.}
+%\label{fig:twocol}
+%\end{figure}
+%
+%\begin{figure*}[!t]
+%\begin{center}
+%\fbox{\rule{0pt}{4in} \rule{0.9\linewidth}{0pt}} % Place holder, replace with \includegraphics, etc.
+%\end{center}
+%   \caption{Example of caption.}
+%\label{fig:onecol}
+%\end{figure*}
+
+Underwater image datasets must be color-reconstructed for species identification, salvage operations, and
+other tasks requiring accurate visual information. Most datasets are manually color balanced using a color
+chart, requiring human interaction and the presence of a color chart in the scene. Recently, a method called
+Sea-Thru utilizing a physical model of light attenuation and backscatter in water was published~\cite{seathru},
+and gained both media and scientific attention. Sea-Thru reconstructs colors in a physics-accurate way and
+produces high-quality images that can be used as inputs to other machine learning algorithms or more easily
+analyzed by humans. However, this method uses depth maps generated using Structure-from-Motion (SFM), a technique
+that requires many images of the scene from different perspectives. This limits use of this technique to certain
+classes of datasets that either contain these images or already include depth information.
+
+In order to address this shortcoming, we turn to recent advances in monocular depth estimation.
+
+\section{Background \& Related Work}
+
+\subsection{Underwater Imaging}
+
+% Backscatter, wideband attenuation, depth dependence, etc.
+
+\begin{equation}
+\label{eqn:scenereconstruction}
+J_c = D_c \exp(\beta_c^D(z)z)
+\end{equation}
+
+\subsection{Sea-thru}
+
+\subsection{Monocular Depth Estimation}
+
+\subsubsection*{Monodepth}
+
+\section{Method}
+
+\subsection{Preprocessing Depth Maps}
+
+\subsubsection*{Structure-from-Motion Maps}
+The provided structure-from-motion maps have depths provided in meters.
+However, depth information is provided for only a portion of the scene, and the other depth
+values must be imputed.
+In addition, some areas of the depth map have invalid (e.g. negative)
+values.
+We first find the minimum and maxiumum depth values in the map. Then, for some user-defined
+percentage $p$, (default 1\%), we set the values in the lowest $p$ percent of depths to the maximum
+value in that range.
+We observe that missing values in the depth maps correspond to far-off areas, and thus we set the
+missing values to the maximum value of the depth map.
+This assumption produces images with inaccurate colors in some areas of the scene with missing values,
+but still generally offers improvement over the raw image.
+
+\subsubsection*{Monodepth Maps}
+Raw underwater images are first fed through an adaptive histogram equalization pipeline before being used
+as input to the monodepth2 network.
+In contrast to depth maps determined from SFM and provided in the dataset, depth maps from monodepth2 and other monocular
+methods are generally relative depths instead of absolute depths;
+e.g. depth values are dimensionless and only given in relation to other objects in the scene as
+opposed to absolute depths in meters.
+We must therefore estimate absolute depths from the provided relative depths. Visibility in water declines
+rapidly with distance, and therefore we define a maximum visibility in meters (default 10) by which to scale the
+relative depths. In addition, due to the field of view of the specific lens, elements at small depths
+are generally not visible when imaging the scene. To account for this, we simply add a value in meters (default 1)
+to each depth in the scene. These maps can then be used in the Sea-Thru algorithm.
+
+As code for Sea-Thru is not provided by the authors, we first implement the method, with
+some modifications.
+
+\subsection{Estimating Backscatter}
+\label{sec:estbackscatter}
+
+Backscatter values are estimated as in the Sea-Thru paper.
+The authors of Sea-Thru observe that image values corresponding to black
+or completely shadowed regions of the scene are entirely determined by
+backscatter, as there is no light reflected from the scene itself in those
+areas.
+Backscattering is dependent on color channel $c$ as well as depth and can be modelled as
+\begin{equation}
+\label{eq:backscatter}
+\hat{B}_c = B^\infty_c\left(1 - \exp(-\beta^B_c z)\right) + J'_c \exp(-\beta^{D'}_c z)
+\end{equation}
+where $\hat{B}_c$ corresponds to the contribution of the backscattering in the
+scene, $B^\infty_c$ corresponds to the global veiling light of the scene, and
+$J'_c \exp(-\beta^{D'}_c z)$ corresponds to a residual term that behaves like the
+image (e.g. to account for patches that are not truly black).
+
+To estimate backscatter, the authors divide the region into evenly-spaced depth
+intervals and take the bottom 1\% of RGB triplets in that interval. These pixels
+are then split into individual RGB values, and values for $B^\infty_c$, $\beta^B_c$,
+$J'_c$, and $\beta^{D'}_c$ are then estimated for each color channel using the
+corresponding depth values, thus giving a model for backscatter at all depths for
+each color channel. We used scipy's \texttt{curve\_fit} function to perform this optimization
+and found that the method works well in practice when taking the parameters with minimum reconstruction
+error after 10 random restarts. However, we found data at very small depths
+to be quite noisy, and therefore we set a minimum cutoff for the depths of colors used in
+the estimations (default 0.1st percentile of the depth values).
+
+\subsection{Estimating Attenuation Coeffcients}
+\subsubsection*{Course Estimate}
+Although we estimated a single scalar value for $\beta^D_c$ in section~\ref{sec:estbackscatter},
+in the Sea-Thru model the wideband attenuation coefficients take into account regions of the scene
+not in shadow, thus reflecting light to the sensor through the
+water medium. Therefore, we must refine our estimate of $\beta^D_c$ to account for varying depths.
+Empirical results and simulations support modeling $\beta^D_c(z)$ as a two term exponential:
+\begin{equation}
+\label{eq:attenuation}
+    \beta^D_c(z) = a \exp(b z) + c \exp(d z)
+\end{equation}
+where $a, b, c, d$ are scalars. Recall from equation~\ref{eqn:scenereconstruction} that
+$J_c = D_c \exp(\beta_c^D(z)z)$, and thus:
+\begin{align}
+\label{eqn:courseest}
+    \frac{\log{J_c} - \log{D_c}}{z} &= \beta_c^D(z) \nonumber \\
+    \frac{-\log{E_c}}{z} &= \beta_c^D(z)
+\end{align}
+Where $E_c$ corresponds to the illuminant map of the scene. This allows us to obtain
+a rough estimate of $\beta_c^D(z)$ for the scene.
+\subsubsection*{Estimating Illuminant Map}
+The authors of Sea-Thru use local space average color (LSAC) to esstimate the illuminant
+map using a range map. This consists of updating the following equations for each pixel
+location $(x,y)$:
+\begin{align}
+    a'(x, y) &= \frac1{|N_\epsilon(x, y)|} \sum_{(x', y') \in N_e(x, y)} {a_c(x', y')} \label{eqn:lsac1} \\
+    a_c(x, y) &= D_c(x, y) \ p + a'_c(x, y)(1-p) \label{eqn:lsac2}
+\end{align}
+where $p$ controls the locality of the neighborhood (default 0.01), and
+$N_\epsilon(x, y)$ is the neighborhood of $(x, y)$ such that
+\begin{equation}
+N_e(x, y) = \lbrace (x', y') \: : \: |z(x, y) - z(x', y')| \leq \epsilon \rbrace
+\end{equation}
+Then $\hat{E}_c = fa_c$, where $f$ is a constant depending on scene geometry and controls global illumination.
+The authors of Sea-Thru suggest $f=2$, but we find that $f=3.5$ works better in practice.
+In addition, we set the minimum size of a neighborhood to be 50 pixels, and reassign smaller neighborhoods
+to the closest neighborhood of large enough size. In addition, we perform morphological closing on the
+neighborhood map with a square structural element of side length 3 to remove holes and refine edges.
+We also perform bilateral filtering on the illumination map to smooth regions inside neighborhoods
+while paying attention to neighborhood boundaries.
+
+\subsubsection*{Refined Estimate}
+To refine the estimate, the authors of Sea-Thru suggest minimizing the reconstruction error of depths as follows:
+first, rewrite equation~\ref{eqn:courseest} as
+\begin{equation}
+\label{eqn:reconstructedz}
+    \hat{z} = \frac{-\log{E_c}}{\beta_c^D(z)}
+\end{equation}
+and finding the values of $a, b, c, d$ that satisfy
+\begin{equation}
+\label{eqn:minimizationZ}
+    \min_{\beta_c^D(z)} \lVert z - \hat{z} \rVert
+\end{equation}
+We formulate the problem as suggested, but failed to achieve consistent convergence. Instead, we minimize
+\begin{equation}
+\label{eqn:minimizationB}
+    \min_{a,b,c,d} \lVert \beta_c^D(z) - \hat{\beta_c^D} \rVert
+\end{equation}
+with 10 random restarts, bounding $a,b,c,d$ to obtain decaying exponentials, and taking the parameter set that
+minimizes the reconstruction error in equation~\ref{eqn:minimizationZ}. This has good convergence performance
+and performs well in practice.
+
+\subsection{White Balancing}
+After reconstructing the image using equation~\ref{eqn:scenereconstruction}, we perform white balancing.
+Sae-Thru uses the Gray World Hypothesis assumption for white balancing, but we find a more visually appealing
+image from calculating the channel scaling factors as the inverse of the average of the top 10\% of the values
+in each channel.
+
+\section{Experimental Results}
+
+\section{Conclusion}
+
+\section*{Acknowledgments}
+
+{\small
+\bibliographystyle{unsrt}
+\bibliography{refs} % Create file refs.bib, and run bibtex.
+}
+
+\end{document}

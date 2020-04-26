@@ -99,7 +99,7 @@ def estimate_wideband_attentuation(depths, illum, radius = 6):
     eps = 1E-8
     BD = -np.log(illum + eps) / (np.maximum(0, depths) + eps)
     mask = np.where(np.logical_and(BD <= 1.0, np.logical_and(depths > eps, illum > eps)), 1, 0)
-    refined_attenuations = denoise_bilateral(np.maximum(0, closing(BD * mask, square(radius))))
+    refined_attenuations = denoise_bilateral(np.maximum(0, BD * mask))
     return refined_attenuations, []
 
 '''
@@ -345,7 +345,11 @@ def run_pipeline(img, depths, args):
     nmap, _ = construct_neighborhood_map(depths, 0.01)
 
     print('Refining neighborhood map...', flush=True)
-    nmap, n = refine_neighborhood_map(nmap, 10)
+    nmap, n = refine_neighborhood_map(nmap, 50)
+    if args.output_graphs:
+        plt.imshow(nmap)
+        plt.title('Neighborhood map')
+        plt.show()
 
     print('Estimating illumination...', flush=True)
     illR = estimate_illumination(img[:, :, 0], Br, nmap, n, p=args.p, max_iters=100, tol=1E-5, f=args.f)
@@ -432,6 +436,19 @@ def preprocess_for_monodepth(img_fname, output_fname):
     img_adapteq = exposure.equalize_adapthist(img, clip_limit=0.03)
     plt.imsave(output_fname, img_adapteq)
 
+def preprocess_sfm_depth_map(depths, min_depth, max_depth):
+    z_min = np.min(depths) + (min_depth * (np.max(depths) - np.min(depths)))
+    z_max = np.min(depths) + (max_depth * (np.max(depths) - np.min(depths)))
+    depths[depths < z_min] = 0
+    depths[depths == 0] = z_max
+    return depths
+
+def preprocess_monodepth_depth_map(depths, additive_depth, multiply_depth):
+    depths = ((depths - np.min(depths)) / (
+                np.max(depths) - np.min(depths))).astype(np.float32)
+    depths = (multiply_depth * (1.0 - depths)) + additive_depth
+    return depths
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--image', required=True, help='Input image')
@@ -440,16 +457,24 @@ if __name__ == '__main__':
     parser.add_argument('--f', type=float, default=2.0, help='f value (controls brightness)')
     parser.add_argument('--p', type=float, default=0.01, help='p value (controls locality of illuminant map)')
     parser.add_argument('--min-depth', type=float, default=0.1, help='Minimum depth value to use in estimations (range 0-1)')
+    parser.add_argument('--max-depth', type=float, default=1.0, help='Replacement depth percentile value for invalid depths (range 0-1)')
     parser.add_argument('--size', type=int, default=320, help='Size to output')
     parser.add_argument('--output-graphs', action='store_true', help='Output graphs')
-    parser.add_argument('--preprocess', action='store_true', help='Preprocess for monodepth')
+    parser.add_argument('--preprocess-for-monodepth', action='store_true', help='Preprocess for monodepth depth maps')
+    parser.add_argument('--monodepth', action='store_true', help='Preprocess for monodepth')
+    parser.add_argument('--monodepth-add-depth', type=float, default=2.0, help='Additive value for monodepth map')
+    parser.add_argument('--monodepth-multiply-depth', type=float, default=10.0, help='Multiplicative value for monodepth map')
     args = parser.parse_args()
 
-    if args.preprocess:
+    if args.preprocess_for_monodepth:
         preprocess_for_monodepth(args.image, args.output)
     else:
         print('Loading image...', flush=True)
         img, depths = load_image_and_depth_map(args.image, args.depth_map, args.size)
+        if args.monodepth:
+            depths = preprocess_monodepth_depth_map(depths, args.monodepth_add_depth, args.monodepth_multiply_depth)
+        else:
+            depths = preprocess_sfm_depth_map(depths, args.min_depth, args.max_depth)
         recovered = run_pipeline(img, depths, args)
         plt.imsave(args.output, recovered)
         print('Done.')
