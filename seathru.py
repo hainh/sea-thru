@@ -5,6 +5,7 @@ import numpy as np
 import sklearn as sk
 import scipy as sp
 import scipy.optimize
+import scipy.stats
 import math
 from PIL import Image
 import rawpy
@@ -95,11 +96,11 @@ def estimate_illumination(img, B, neighborhood_map, num_neighborhoods, p=0.5, f=
 '''
 Estimate values for beta_D
 '''
-def estimate_wideband_attentuation(depths, illum, radius = 6):
+def estimate_wideband_attentuation(depths, illum, radius = 6, max_val = 10.0):
     eps = 1E-8
-    BD = -np.log(illum + eps) / (np.maximum(0, depths) + eps)
-    mask = np.where(np.logical_and(BD <= 1.0, np.logical_and(depths > eps, illum > eps)), 1, 0)
-    refined_attenuations = denoise_bilateral(np.maximum(0, BD * mask))
+    BD = np.minimum(max_val, -np.log(illum + eps) / (np.maximum(0, depths) + eps))
+    mask = np.where(np.logical_and(depths > eps, illum > eps), 1, 0)
+    refined_attenuations = denoise_bilateral(closing(np.maximum(0, BD * mask), disk(radius)))
     return refined_attenuations, []
 
 '''
@@ -112,13 +113,14 @@ def calculate_beta_D(depths, a, b, c, d):
 Estimate coefficients for the 2-term exponential
 describing the wideband attenuation
 '''
-def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_depth_percent = 0.001):
+def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_depth_fraction = 0.01, max_mean_loss_fraction=0.2):
     eps = 1E-8
     z_max, z_min = np.max(depths), np.min(depths)
-    min_depth = z_min + (min_depth_percent * (z_max - z_min))
+    min_depth = z_min + (min_depth_fraction * (z_max - z_min))
+    max_mean_loss = max_mean_loss_fraction * (z_max - z_min)
     coefs = None
     best_loss = np.inf
-    locs = np.where(np.logical_and(depths > min_depth, estimation > eps))
+    locs = np.where(np.logical_and(depths > min_depth, illum > eps))
     def opt_f(depths, a, b, c, d):
         return ((a * np.exp(b * depths)) + (c * np.exp(d * depths)) + eps)
     def calculate_reconstructed_depths(depths, illum, a, b, c, d):
@@ -135,14 +137,19 @@ def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_dep
                 xdata=depths[locs],
                 ydata=estimation[locs],
                 p0=np.abs(np.random.random(4)) * np.array([1., -1., 1., -1.]),
-                bounds=([0, -10, 0, -10], [50, 0, 50, 0]))
-            l = loss(*optp)
+                bounds=([0, -3, 0, -3], [10, 0, 10, 0]))
+            l = loss(*optp) / len(locs[0])
             if l < best_loss:
                 best_loss = l
                 coefs = optp
         except RuntimeError as re:
             print(re, file=sys.stderr)
-    BD = calculate_beta_D(depths, *coefs) * np.where(np.logical_and(depths > eps, illum > eps), 1, 0)
+    if best_loss > max_mean_loss:
+        print('Warning: could not find accurate reconstruction. Switching to linear model.', flush=True)
+        slope, intercept, r_value, p_value, std_err = sp.stats.linregress(depths[locs], estimation[locs])
+        BD = slope * depths + intercept # * np.where(np.logical_and(depths > eps, illum > eps), 1, 0)
+        return BD, np.array([slope, intercept])
+    BD = calculate_beta_D(depths, *coefs) # * np.where(np.logical_and(depths > eps, illum > eps), 1, 0)
     return BD, coefs
 
 '''
@@ -356,6 +363,10 @@ def run_pipeline(img, depths, args):
     illG = estimate_illumination(img[:, :, 1], Bg, nmap, n, p=args.p, max_iters=100, tol=1E-5, f=args.f)
     illB = estimate_illumination(img[:, :, 2], Bb, nmap, n, p=args.p, max_iters=100, tol=1E-5, f=args.f)
     ill = np.stack([illR, illG, illB], axis=2)
+    if args.output_graphs:
+        plt.imshow(ill)
+        plt.title('Illuminant map')
+        plt.show()
 
     print('Estimating wideband attenuation...', flush=True)
     beta_D_r, _ = estimate_wideband_attentuation(depths, illR)
@@ -381,17 +392,22 @@ def run_pipeline(img, depths, args):
     # check optimization for beta_D channel
     if args.output_graphs:
         eps = 1E-5
+        def eval_xs(xs, coefs):
+            if len(coefs) == 2:
+                return xs * coefs[0] + coefs[1]
+            else:
+                return (coefs[0] * np.exp(coefs[1] * xs)) + (coefs[2] * np.exp(coefs[3] * xs))
         locs = np.where(
             np.logical_and(beta_D_r > eps, np.logical_and(beta_D_g > eps, np.logical_and(depths > eps, beta_D_b > eps))))
         plt.scatter(depths[locs].ravel(), beta_D_b[locs].ravel(), c='b')
         xs = np.linspace(np.min(depths[locs]), np.max(depths[locs]), 1000)
-        ys = np.array([((coefsB[0] * np.exp(coefsB[1] * x)) + (coefsB[2] * np.exp(coefsB[3] * x))) for x in xs])
+        ys = eval_xs(xs, coefsB)
         plt.plot(xs.ravel(), ys.ravel(), c='b')
         plt.scatter(depths[locs].ravel(), beta_D_g[locs].ravel(), c='g')
-        ys = np.array([((coefsG[0] * np.exp(coefsG[1] * x)) + (coefsG[2] * np.exp(coefsG[3] * x))) for x in xs])
+        ys = eval_xs(xs, coefsG)
         plt.plot(xs.ravel(), ys.ravel(), c='g')
         plt.scatter(depths[locs].ravel(), beta_D_r[locs].ravel(), c='r')
-        ys = np.array([((coefsR[0] * np.exp(coefsR[1] * x)) + (coefsR[2] * np.exp(coefsR[3] * x))) for x in xs])
+        ys = eval_xs(xs, coefsR)
         plt.plot(xs.ravel(), ys.ravel(), c='r')
         plt.xlabel('Depth (m)')
         plt.ylabel('$\\beta^D$')
