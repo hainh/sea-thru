@@ -63,24 +63,91 @@ analyzed by humans. However, this method uses depth maps generated using Structu
 that requires many images of the scene from different perspectives. This limits use of this technique to certain
 classes of datasets that either contain these images or already include depth information.
 
-In order to address this shortcoming, we turn to recent advances in monocular depth estimation.
+In order to address this shortcoming, we turn to recent advances in monocular depth estimation. These convolutional
+neural network-based methods use visual cues in the scene to produce a rough estimate of depth~\cite{bhoi2019monocular}.
+Although these methods are generally trained using above-water images, with appropriate preprocessing we can obtain
+a reasonable depth estimate for underwater images. This technique opens up Sea-Thru to applications where color
+correctness is not necessarily crucial, but a more accurate rendition of colors is desired.
+
+In order to evaluate our method, we use the underwater RGBD dataset provided by~\cite{seathru} and estimate depth
+for these test images using monodepth2~\cite{monodepth2}, a monocular depth estimation framework by Godard
+\textit{et al.} We then visually compare results from the two methods to determine color reconstruction accuracy,
+as a direct comparison without accurate depth information is quite difficult.
+
+\begin{figure}[!t]
+\begin{center}
+\includegraphics[width=3.0in]{out/example_1/orig.jpg}\newline
+\includegraphics[width=3.0in]{out/example_1/depth_from_monodepth.png}
+\end{center}
+   \caption{\small{Example of original image and recovered, color-corrected image from monocular depth estimation. Note
+   the red color shading in some areas of differing illumination and the image artifacts near the border. However, the
+   coloring is much improved.}}
+\label{fig:exampleout}
+\end{figure}
 
 \section{Background \& Related Work}
 
 \subsection{Underwater Imaging}
-
 % Backscatter, wideband attenuation, depth dependence, etc.
+Underwater imaging is inherently different from atmospheric imaging due to the nature of the medium.
+Although backscatter and wideband attenuation occur in media such as air, the extent to which
+these phenomena affect the image at normal depths is negligible. These phenomena
+severely affect the image underwater, as if taking an image through a thick, colored fog
+with uneven illumination -- clearly a challenging setting. Previous models based on atmospheric imaging
+neglect the wavelength-dependency of the underwater setting and assume these coefficients to be the same,
+in contrast to the Sea-Thru model, which evaluates the effects independently.
 
+In the Sea-Thru model, underwater image formation can be modeled as the following:
+\begin{equation}
+\label{eqn:imageformation}
+I_c = D_c + B_c
+\end{equation}
+where $c$ is an RBG channel, $I_c$ is the observed image for the channel, $D_c$ is the direct signal from the scene,
+and $B_c$ is the effect of backscattering. As the medium has different attenuation coefficients and backscatter for
+each wavelength of light, we must calculate these values independently for each color channel. Values closer to red
+are more subject to attenuation, thus decreasing the intensity of the red channel and lending water its characteristic
+blue-green cast, and backscatter contributes heavily the cloudiness in underwater scenes. If we can describe the
+effect of backscatter and attenuation at each depth, we can reconstruct the image as follows:
 \begin{equation}
 \label{eqn:scenereconstruction}
 J_c = D_c \exp(\beta_c^D(z)z)
 \end{equation}
+where $J_c$ is the true image, $D_c = I_c - B_c$, and $\beta_c^D(z)$ is the depth-dependent wideband attenuation
+coefficient.
+Backscattering is dependent on color channel $c$ as well as depth and can be modelled as
+\begin{equation}
+\label{eqn:backscatter}
+\hat{B}_c = B^\infty_c\left(1 - \exp(-\beta^B_c z)\right) + J'_c \exp(-\beta^{D'}_c z)
+\end{equation}
+where $\hat{B}_c$ corresponds to the contribution of the backscattering in the
+scene, $B^\infty_c$ corresponds to the global veiling light of the scene, and
+$J'_c \exp(-\beta^{D'}_c z)$ corresponds to a residual term that behaves like the
+image (e.g. to account for patches that are not truly black).
 
-\subsection{Sea-thru}
+Thus, the image formation can be expanded as:
+\begin{equation}
+\label{eqn:imageformationexpanded}
+I_c = J_c e^{\beta_c^D(z)z} + B^\infty_c \left( 1 - e^{-\beta_c^B(z)z} \right)
+\end{equation}
 
 \subsection{Monocular Depth Estimation}
 
+Classical depth estimation pipelines use pairs of aligned stereo images. A physical model of disparity can therefore
+be calculated from corresponding parts of the aligned imges. The fundamental challenge of monocular depth estimation is
+that this physical model cannot be used, and therefore depth must be estimated from visual cues in the image. Many
+approaches exist for this task, most trained end-to-end using depth maps from stereo images. These can give a reasonable
+approximation of depth for many tasks, but generally only generalize well to images like the training sets.
+
 \subsubsection*{Monodepth}
+
+A recent advance in monocular depth estimation is the development of an end-to-end self-supervised network for depth
+estimation. We briefly describe the method; for more details see ~\cite{monodepth2}. The network takes in a pair
+of images of the scene from different viewpoints and trains both a depth and pose network based on those images.
+Instead of the classical minimization of the error in the depth maps, the network instead estimates the pose
+between the two images, computes the depth map, and then calculates the reprojection of the first image onto the
+second using the estimated pose and depth map. The loss to be minimized is the reconstruction error of this estimation.
+This allows the network to be trained purely from stereo images, instead of relying on complicated and expensive
+depth map estimates.
 
 \section{Method}
 
@@ -124,20 +191,11 @@ The authors of Sea-Thru observe that image values corresponding to black
 or completely shadowed regions of the scene are entirely determined by
 backscatter, as there is no light reflected from the scene itself in those
 areas.
-Backscattering is dependent on color channel $c$ as well as depth and can be modelled as
-\begin{equation}
-\label{eq:backscatter}
-\hat{B}_c = B^\infty_c\left(1 - \exp(-\beta^B_c z)\right) + J'_c \exp(-\beta^{D'}_c z)
-\end{equation}
-where $\hat{B}_c$ corresponds to the contribution of the backscattering in the
-scene, $B^\infty_c$ corresponds to the global veiling light of the scene, and
-$J'_c \exp(-\beta^{D'}_c z)$ corresponds to a residual term that behaves like the
-image (e.g. to account for patches that are not truly black).
 
 To estimate backscatter, the authors divide the region into evenly-spaced depth
 intervals and take the bottom 1\% of RGB triplets in that interval. These pixels
 are then split into individual RGB values, and values for $B^\infty_c$, $\beta^B_c$,
-$J'_c$, and $\beta^{D'}_c$ are then estimated for each color channel using the
+$J'_c$, and $\beta^{D'}_c$ (equation~\ref{eqn:backscatter}) are then estimated for each color channel using the
 corresponding depth values, thus giving a model for backscatter at all depths for
 each color channel. We used scipy's \texttt{curve\_fit} function to perform this optimization
 and found that the method works well in practice when taking the parameters with minimum reconstruction
@@ -179,7 +237,7 @@ $N_\epsilon(x, y)$ is the neighborhood of $(x, y)$ such that
 N_e(x, y) = \lbrace (x', y') \: : \: |z(x, y) - z(x', y')| \leq \epsilon \rbrace
 \end{equation}
 Then $\hat{E}_c = fa_c$, where $f$ is a constant depending on scene geometry and controls global illumination.
-The authors of Sea-Thru suggest $f=2$, but we find that $f=3.5$ works better in practice.
+The authors of Sea-Thru suggest $f=2$.
 In addition, we set the minimum size of a neighborhood to be 50 pixels, and reassign smaller neighborhoods
 to the closest neighborhood of large enough size. In addition, we perform morphological closing on the
 neighborhood map with a square structural element of side length 3 to remove holes and refine edges.
@@ -205,7 +263,11 @@ We formulate the problem as suggested, but failed to achieve consistent converge
 \end{equation}
 with 10 random restarts, bounding $a,b,c,d$ to obtain decaying exponentials, and taking the parameter set that
 minimizes the reconstruction error in equation~\ref{eqn:minimizationZ}. This has good convergence performance
-and performs well in practice.
+and performs well in practice. If this still does not converge, we use a linear model instead of the two-term
+exponential. We also add a multiplier $l$ to counteract the overestimation from the illumination map's value of
+$f$ (default 0.5). In addition, we filter the input data such that successive data points are at least 1\% of the
+full depth range away from each other; this balances the data set such that an exponential trend can be estimated
+instead of being dominated by the clusters of datapoints at minimum and maximum depth.
 
 \subsection{White Balancing}
 After reconstructing the image using equation~\ref{eqn:scenereconstruction}, we perform white balancing.
@@ -215,9 +277,101 @@ in each channel.
 
 \section{Experimental Results}
 
+\subsection{Comparison of Results}
+
+We compare the estimated values for parameters on the same image in figures~\ref{fig:Bccomparison}
+and~\ref{fig:betaDcomparison}, and compare the final images in figure~\ref{fig:imgcomparison}.
+The results are visually similar for both depth estimation methods. In addition, example neighborhood maps,
+lighting maps, etc. are shown in figure~\ref{fig:components}.
+
+\begin{figure}[!t]
+\begin{center}
+\includegraphics[width=3.0in]{out/example_1/Bc_values_sfm.png}\newline
+\includegraphics[width=3.0in]{out/example_1/Bc_values_monodepth.png}
+\end{center}
+   \caption{\small{Comparison of estimated $B_c(z)$ values between SFM depth maps (top) and monodepth maps (bottom).
+   The results are quite similar, lending support to this method.}}
+\label{fig:Bccomparison}
+\end{figure}
+
+\begin{figure}[!t]
+\begin{center}
+\includegraphics[width=3.0in]{out/example_1/betaD_values_sfm.png}\newline
+\includegraphics[width=3.0in]{out/example_1/betaD_values_monodepth.png}
+\end{center}
+   \caption{\small{Comparison of estimated $\beta^D_c(z)$ values between SFM depth maps (top) and monodepth maps (bottom).
+   Although the monodepth values are generally noisier, an exponential curve is still produced, and the final results
+   are still visually similar.}}
+\label{fig:betaDcomparison}
+\end{figure}
+
+\begin{figure}[!t]
+\begin{center}
+\includegraphics[width=3.0in]{out/example_1/depth_from_sfm_processed.jpg}\newline
+\includegraphics[width=3.0in]{out/example_1/depth_from_monodepth_processed.jpg}
+\end{center}
+   \caption{\small{Comparison of final images using SFM (top) and monodepth2 (bottom). Images were run
+   with identical parameters, and min and max depths for monodepth were estimated using
+   the SFM depth map to increase correspondence between the images. Both images have had exposure
+   increased by 1 stop for the purposes of comparison. Artifacts due to inaccurate depth are present in each image;
+   in the SFM image, depth information is only present for the seafloor and part of the reef. One can see where
+   this information ends by the thin black line on the top image.
+   Areas with depth values from SFM have excellent reconstruction, but areas without depth information
+   were set the the maximum depth in the image, and have color artifacts. The monodepth map also has color artifacts
+   from inaccurate depth values.}}
+\label{fig:imgcomparison}
+\end{figure}
+
+\begin{figure*}[!t]
+\begin{center}
+\includegraphics[width=7.0in]{out/example_1/components_monodepth.png}\newline
+\end{center}
+   \caption{\small{From left-to-right, top-to-bottom: input, neighborhood map, backscatter coefficients, illumination map,
+   attenuation coefficients, and unprocessed output for a monodepth-processed image.}}
+\label{fig:components}
+\end{figure*}
+
+\subsection{Success and Failure Cases of Monocular Depth Estimation}
+In images with depth maps that smoothly vary or vary by small amounts, monocular depth estimation (coupled with
+semi-accurate estimation of min and max depths by eye) can give results that are very similar to the true values.
+An example of this is shown in figure~\ref{fig:imgcomparison2}.
+This is mainly due to the smoothness of the estimated depth map and the estimation of minimum depth instead of
+and intrinsic strength of the network. In other cases where the image is of a scene where multiple objects and
+the sea floor are visible, the network also gives reasonable results. This is likely due to the similarity of
+the scene to stereo training data.
+
+\begin{figure}[!t]
+\begin{center}
+\includegraphics[width=3.0in]{out/example_2/depth_from_sfm.png}\newline
+\includegraphics[width=3.0in]{out/example_2/depth_from_monodepth.png}
+\end{center}
+   \caption{\small{An example where both methods produce the same results given accurate min and max depth values.
+   SFM is top, monodepth is bottom.}}
+\label{fig:imgcomparison2}
+\end{figure}
+
+In scenes with little depth information or those very different from a scene above water, however, the network
+produces considerably less appealing images. Although the adaptive contrast stretching helps, the scene is
+simply too attenuated and unfamiliar to produce a good estimate.
+
 \section{Conclusion}
+In this work, we implement and extend the Sea-Thru method to take advantage of monocular depth estimation.
+Although this does not produce as accurate results as using depth maps from Structure-from-Motion, monocular
+depth estimation methods can produce visually appealing results on real data with minimal user interaction.
+We show samples of images computed using both methods and discuss where monocular depth estimation fails to
+produce accurate results.
+
+In the future, we hope to enable the training of monocular depth estimation networks on this kind of color-corrected
+underwater scene data to hopefully improve the accuracy of this method in underwater and heavily obscured scenes.
+In fact, iterative rounds of color correction and retraining of the monocular depth network on this data could
+rapidly improve performance on underwater scenes.
+
+We hope that this method proves useful to those wishing to view the beautiful colors of coral reefs and ocean floors
+without the use of specialized equipment.
 
 \section*{Acknowledgments}
+Thank you to the original authors for providing the training data and Gabriel Brostow and Niantic, Inc. for
+releasing and maintaining monodepth2.
 
 {\small
 \bibliographystyle{unsrt}
