@@ -131,14 +131,14 @@ def filter_data(X, Y, radius_fraction=0.01):
 Estimate coefficients for the 2-term exponential
 describing the wideband attenuation
 '''
-def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_depth_fraction = 0.01, max_mean_loss_fraction=0.2, l=0.5, radius_fraction=0.01):
+def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_depth_fraction = 0.0, max_mean_loss_fraction=0.1, l=0.5, radius_fraction=0.01):
     eps = 1E-8
     z_max, z_min = np.max(depths), np.min(depths)
     min_depth = z_min + (min_depth_fraction * (z_max - z_min))
     max_mean_loss = max_mean_loss_fraction * (z_max - z_min)
     coefs = None
     best_loss = np.inf
-    locs = np.where(np.logical_and(depths > min_depth, illum > eps))
+    locs = np.where(np.logical_and(illum > 0, np.logical_and(depths > min_depth, estimation > eps)))
     def opt_f(depths, a, b, c, d):
         return ((a * np.exp(b * depths)) + (c * np.exp(d * depths)) + eps)
     def calculate_reconstructed_depths(depths, illum, a, b, c, d):
@@ -147,7 +147,7 @@ def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_dep
         return res
     def loss(a, b, c, d):
         return np.linalg.norm(depths[locs] - calculate_reconstructed_depths(depths[locs], illum[locs], a, b, c, d))
-    dX, dY =filter_data(depths[locs], estimation[locs], radius_fraction)
+    dX, dY = filter_data(depths[locs], estimation[locs], radius_fraction)
     for _ in range(restarts):
         try:
             optp, pcov = sp.optimize.curve_fit(
@@ -162,12 +162,16 @@ def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_dep
                 coefs = optp
         except RuntimeError as re:
             print(re, file=sys.stderr)
+    plt.clf()
+    plt.scatter(depths[locs], estimation[locs])
+    plt.plot(np.sort(depths[locs]), opt_f(np.sort(depths[locs]), *coefs))
+    plt.show()
     if best_loss > max_mean_loss:
         print('Warning: could not find accurate reconstruction. Switching to linear model.', flush=True)
         slope, intercept, r_value, p_value, std_err = sp.stats.linregress(depths[locs], estimation[locs])
-        BD = slope * depths + intercept # * np.where(np.logical_and(depths > eps, illum > eps), 1, 0)
+        BD = (slope * depths + intercept)
         return l * BD, np.array([slope, intercept])
-    BD = l * calculate_beta_D(depths, *coefs) # * np.where(np.logical_and(depths > eps, illum > eps), 1, 0)
+    BD = l * calculate_beta_D(depths, *coefs)
     return BD, coefs
 
 '''
