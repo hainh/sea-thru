@@ -1,0 +1,11 @@
+scikit-learn
+numpy
+matplotlib
+pillow
+scipy
+rawpy
+scikit-image
+torch
+torchvision
+pynng
+pyyaml

@@ -12,7 +12,7 @@ import rawpy
 import matplotlib
 from matplotlib import pyplot as plt
 from skimage import exposure
-from skimage.restoration import denoise_bilateral
+from skimage.restoration import denoise_bilateral, denoise_tv_chambolle, estimate_sigma
 from skimage.morphology import closing, opening, erosion, dilation, disk, diamond, square
 
 matplotlib.use('TkAgg')
@@ -162,10 +162,11 @@ def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_dep
                 coefs = optp
         except RuntimeError as re:
             print(re, file=sys.stderr)
-    plt.clf()
-    plt.scatter(depths[locs], estimation[locs])
-    plt.plot(np.sort(depths[locs]), opt_f(np.sort(depths[locs]), *coefs))
-    plt.show()
+    # Uncomment to see the regression
+    # plt.clf()
+    # plt.scatter(depths[locs], estimation[locs])
+    # plt.plot(np.sort(depths[locs]), opt_f(np.sort(depths[locs]), *coefs))
+    # plt.show()
     if best_loss > max_mean_loss:
         print('Warning: could not find accurate reconstruction. Switching to linear model.', flush=True)
         slope, intercept, r_value, p_value, std_err = sp.stats.linregress(depths[locs], estimation[locs])
@@ -182,7 +183,7 @@ def recover_image(img, depths, B, beta_D, nmap):
     res = (img - B) * np.exp(beta_D * np.expand_dims(depths, axis=2))
     res = np.maximum(0.0, np.minimum(1.0, res))
     res[nmap == 0] = img[nmap == 0]
-    return scale(wbalance_10p(res))
+    return scale(wbalance_no_red_10p(res))
 
 '''
 Reconstruct the scene and globally white balance
@@ -192,7 +193,7 @@ def recover_image_S4(img, B, illum, nmap):
     res = (img - B) / (illum + eps)
     res = np.maximum(0.0, np.minimum(1.0, res))
     res[nmap == 0] = img[nmap == 0]
-    return scale(wbalance_10p(res))
+    return scale(res)
 
 
 '''
@@ -239,7 +240,7 @@ def construct_neighborhood_map(depths, epsilon=0.05):
 Finds the closest nonzero label to a location
 '''
 def find_closest_label(nmap, start_x, start_y):
-    mask = np.zeros_like(depths).astype(np.bool)
+    mask = np.zeros_like(nmap).astype(np.bool)
     q = collections.deque()
     q.append((start_x, start_y))
     while not len(q) == 0:
@@ -248,19 +249,19 @@ def find_closest_label(nmap, start_x, start_y):
             if nmap[x, y] != 0:
                 return nmap[x, y]
             mask[x, y] = True
-            if 0 <= x < depths.shape[0] - 1:
+            if 0 <= x < nmap.shape[0] - 1:
                 x2, y2 = x + 1, y
                 if not mask[x2, y2]:
                     q.append((x2, y2))
-            if 1 <= x < depths.shape[0]:
+            if 1 <= x < nmap.shape[0]:
                 x2, y2 = x - 1, y
                 if not mask[x2, y2]:
                     q.append((x2, y2))
-            if 0 <= y < depths.shape[1] - 1:
+            if 0 <= y < nmap.shape[1] - 1:
                 x2, y2 = x, y + 1
                 if not mask[x2, y2]:
                     q.append((x2, y2))
-            if 1 <= y < depths.shape[1]:
+            if 1 <= y < nmap.shape[1]:
                 x2, y2 = x, y - 1
                 if not mask[x2, y2]:
                     q.append((x2, y2))
@@ -328,17 +329,33 @@ def wbalance_10p(img):
     img[:, :, 2] *= db
     return img
 
+'''
+White balance based on top 10% average values of blue and green channel
+'''
+def wbalance_no_red_10p(img):
+    dg = 1.0 / np.mean(np.sort(img[:, :, 1], axis=None)[int(round(-1 * np.size(img[:, :, 0]) * 0.1)):])
+    db = 1.0 / np.mean(np.sort(img[:, :, 2], axis=None)[int(round(-1 * np.size(img[:, :, 0]) * 0.1)):])
+    dsum = dg + db
+    dg = dg / dsum * 2.
+    db = db / dsum * 2.
+    img[:, :, 0] *= (db + dg) / 2
+    img[:, :, 1] *= dg
+    img[:, :, 2] *= db
+    return img
+
 def scale(img):
     return (img - np.min(img)) / (np.max(img) - np.min(img))
 
 def run_pipeline(img, depths, args):
+    if 'output_graphs' not in args:
+        args.output_graphs = False
     if args.output_graphs:
         plt.imshow(depths)
         plt.title('Depth Map')
         plt.show()
 
     print('Estimating backscatter...', flush=True)
-    ptsR, ptsG, ptsB = find_backscatter_estimation_points(img, depths, fraction=0.01, min_depth_percent=args.min_depth)
+    ptsR, ptsG, ptsB = find_backscatter_estimation_points(img, depths, fraction=0.1, min_depth_percent=args.min_depth)
 
     print('Finding backscatter coefficients...', flush=True)
     Br, coefsR = find_backscatter_values(ptsR, depths, restarts=25)
@@ -506,7 +523,7 @@ if __name__ == '__main__':
     parser.add_argument('--monodepth', action='store_true', help='Preprocess for monodepth')
     parser.add_argument('--monodepth-add-depth', type=float, default=2.0, help='Additive value for monodepth map')
     parser.add_argument('--monodepth-multiply-depth', type=float, default=10.0, help='Multiplicative value for monodepth map')
-    parser.add_argument('--scale-image-brightness', action='store_true', help='Scale the image brightness for final output')
+    parser.add_argument('--equalize-image', action='store_true', help='Histogram equalization for final output')
     args = parser.parse_args()
 
     if args.preprocess_for_monodepth:
@@ -519,7 +536,9 @@ if __name__ == '__main__':
         else:
             depths = preprocess_sfm_depth_map(depths, args.min_depth, args.max_depth)
         recovered = run_pipeline(img, depths, args)
-        if args.scale_image_brightness:
-            recovered = scale(recovered)
+        if args.equalize_image:
+            recovered = exposure.equalize_adapthist(np.array(recovered), clip_limit=0.03)
+            sigma_est = estimate_sigma(recovered, multichannel=True, average_sigmas=True)
+            recovered = denoise_tv_chambolle(recovered, sigma_est, multichannel=True)
         plt.imsave(args.output, recovered)
         print('Done.')
