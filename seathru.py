@@ -95,7 +95,7 @@ def estimate_illumination(img, B, neighborhood_map, num_neighborhoods, p=0.5, f=
         locs_list[label - 1] = np.where(neighborhood_map == label)
         sizes[label - 1] = np.size(locs_list[label - 1][0])
     for _ in range(max_iters):
-        for label in range(1, num_neighborhoods+ 1):
+        for label in range(1, num_neighborhoods + 1):
             locs = locs_list[label - 1]
             size = sizes[label - 1] - 1
             avg_cs_prime[locs] = (1 / size) * (np.sum(avg_cs[locs]) - avg_cs[locs])
@@ -152,7 +152,7 @@ def filter_data(X, Y, radius_fraction=0.01):
 Estimate coefficients for the 2-term exponential
 describing the wideband attenuation
 '''
-def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_depth_fraction = 0.0, max_mean_loss_fraction=0.1, l=0.5, radius_fraction=0.01):
+def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_depth_fraction = 0.1, max_mean_loss_fraction=np.inf, l=1.0, radius_fraction=0.01):
     eps = 1E-8
     z_max, z_min = np.max(depths), np.min(depths)
     min_depth = z_min + (min_depth_fraction * (z_max - z_min))
@@ -160,34 +160,32 @@ def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_dep
     coefs = None
     best_loss = np.inf
     locs = np.where(np.logical_and(illum > 0, np.logical_and(depths > min_depth, estimation > eps)))
-    def opt_f(depths, a, b, c, d):
-        return ((a * np.exp(b * depths)) + (c * np.exp(d * depths)) + eps)
     def calculate_reconstructed_depths(depths, illum, a, b, c, d):
         eps = 1E-5
         res = -np.log(illum + eps) / (calculate_beta_D(depths, a, b, c, d) + eps)
         return res
     def loss(a, b, c, d):
-        return np.linalg.norm(depths[locs] - calculate_reconstructed_depths(depths[locs], illum[locs], a, b, c, d))
+        return np.mean(np.abs(depths[locs] - calculate_reconstructed_depths(depths[locs], illum[locs], a, b, c, d)))
     dX, dY = filter_data(depths[locs], estimation[locs], radius_fraction)
     for _ in range(restarts):
         try:
             optp, pcov = sp.optimize.curve_fit(
-                f=opt_f,
+                f=calculate_beta_D,
                 xdata=dX,
                 ydata=dY,
                 p0=np.abs(np.random.random(4)) * np.array([1., -1., 1., -1.]),
-                bounds=([0, -5, 0, -5], [15, 0, 15, 0]))
-            l = loss(*optp) / len(locs[0])
-            if l < best_loss:
-                best_loss = l
+                bounds=([0, -100, 0, -100], [100, 0, 100, 0]))
+            L = loss(*optp)
+            if L < best_loss:
+                best_loss = L
                 coefs = optp
         except RuntimeError as re:
             print(re, file=sys.stderr)
     # Uncomment to see the regression
-    # plt.clf()
-    # plt.scatter(depths[locs], estimation[locs])
-    # plt.plot(np.sort(depths[locs]), opt_f(np.sort(depths[locs]), *coefs))
-    # plt.show()
+    plt.clf()
+    plt.scatter(depths[locs], estimation[locs])
+    plt.plot(np.sort(depths[locs]), calculate_beta_D(np.sort(depths[locs]), *coefs))
+    plt.show()
     if best_loss > max_mean_loss:
         print('Warning: could not find accurate reconstruction. Switching to linear model.', flush=True)
         slope, intercept, r_value, p_value, std_err = sp.stats.linregress(depths[locs], estimation[locs])
