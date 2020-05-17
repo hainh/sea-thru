@@ -105,7 +105,7 @@ if __name__ == '__main__':
     parser.add_argument('--image', required=True, help='Input image')
     parser.add_argument('--output', default='output.png', help='Output filename')
     parser.add_argument('--f', type=float, default=2.0, help='f value (controls brightness)')
-    parser.add_argument('--l', type=float, default=1.0, help='l value (controls balance of attenuation constants)')
+    parser.add_argument('--l', type=float, default=0.5, help='l value (controls balance of attenuation constants)')
     parser.add_argument('--p', type=float, default=0.01, help='p value (controls locality of illuminant map)')
     parser.add_argument('--min-depth', type=float, default=0.0,
                         help='Minimum depth value to use in estimations (range 0-1)')

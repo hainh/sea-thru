@@ -182,10 +182,10 @@ def refine_wideband_attentuation(depths, illum, estimation, restarts=10, min_dep
         except RuntimeError as re:
             print(re, file=sys.stderr)
     # Uncomment to see the regression
-    plt.clf()
-    plt.scatter(depths[locs], estimation[locs])
-    plt.plot(np.sort(depths[locs]), calculate_beta_D(np.sort(depths[locs]), *coefs))
-    plt.show()
+    # plt.clf()
+    # plt.scatter(depths[locs], estimation[locs])
+    # plt.plot(np.sort(depths[locs]), calculate_beta_D(np.sort(depths[locs]), *coefs))
+    # plt.show()
     if best_loss > max_mean_loss:
         print('Warning: could not find accurate reconstruction. Switching to linear model.', flush=True)
         slope, intercept, r_value, p_value, std_err = sp.stats.linregress(depths[locs], estimation[locs])
@@ -202,9 +202,10 @@ based the Gray World Hypothesis
 def recover_image(img, depths, B, beta_D, nmap):
     res = (img - B) * np.exp(beta_D * np.expand_dims(depths, axis=2))
     res = np.maximum(0.0, np.minimum(1.0, res))
+    res[nmap == 0] = 0
+    res = scale(wbalance_no_red_10p(res))
     res[nmap == 0] = img[nmap == 0]
-    return scale(wbalance_no_red_10p(res))
-    # return scale(wbalance_10p(res))
+    return res
 
 
 '''
@@ -559,7 +560,7 @@ if __name__ == '__main__':
     parser.add_argument('--p', type=float, default=0.01, help='p value (controls locality of illuminant map)')
     parser.add_argument('--min-depth', type=float, default=0.1, help='Minimum depth value to use in estimations (range 0-1)')
     parser.add_argument('--max-depth', type=float, default=1.0, help='Replacement depth percentile value for invalid depths (range 0-1)')
-    parser.add_argument('--spread-data-fraction', type=float, default=0.001, help='Require data to be this fraction of depth range away from each other in attenuation estimations')
+    parser.add_argument('--spread-data-fraction', type=float, default=0.01, help='Require data to be this fraction of depth range away from each other in attenuation estimations')
     parser.add_argument('--size', type=int, default=320, help='Size to output')
     parser.add_argument('--output-graphs', action='store_true', help='Output graphs')
     parser.add_argument('--preprocess-for-monodepth', action='store_true', help='Preprocess for monodepth depth maps')
