@@ -1,0 +1,14 @@
+services:
+  seathru:
+    # These environment variables are coming from the .env file in the project root (usually the same as this directory)
+    platform: ${PLATFORM}
+    container_name: ${SERVICE}
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+      args:
+        - CONDA_ENV_NAME=${SERVICE}
+        - WORKING_DIR=${WORKING_DIR}
+        - PLATFORM=${PLATFORM}
+    volumes:
+      - .:${WORKING_DIR}
