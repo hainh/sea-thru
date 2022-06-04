@@ -1,0 +1,27 @@
+# Conda Environment https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html
+name: $CONDA_ENV_NAME
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+ # Dependencies for sea-thru migrated from requirements.txt https://github.com/hainh/sea-thru/blob/master/requirements.txt
+  - scikit-learn=0.24.2
+  - numpy=1.19.2
+  - matplotlib=2.2.2
+  - pillow=5.1.0
+  - scipy=1.5.2
+  - scikit-image=0.16.2
+  - pynng=0.7.1
+  - pyyaml=5.4.1
+
+  # Lock pip version as well to install rawpy, wasn't able to install through conda/mamba
+  - pip=21.3.1
+  - pip:
+    - rawpy==0.16.0
+
+  # Dependencies and python version for Monodepth2 described here: https://github.com/nianticlabs/monodepth2#%EF%B8%8F-setup
+  - python=3.6.6
+  - pytorch=0.4.1
+  - torchvision=0.2.1
+  - tensorboardX=1.4
+  - opencv=3.3.1
