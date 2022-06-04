@@ -8,12 +8,11 @@ This fork's only aim is to standardize the dependencies and environment with [Do
 Additionally, in order to make this an all-in-one package, the [Monodepth2 submodule](https://github.com/nianticlabs/monodepth2/tree/b676244e5a1ca55564eb5d16ab521a48f823af31) has been cloned and commited directly into this repo, preserving the commit history and original authors.
 
 ## Prerequisites
----
 
 [Docker](https://docs.docker.com/get-docker/)
 
 ## Setup
----
+
 1. Run `docker compose up --build`
     - This can take around 2 hours the first time; from then onwards you only need to run `docker compose up` to get the container running and it'll boot up instantly.
 2. Once the container is built and running, in a separate terminal run `docker exec -it seathru /bin/bash`
@@ -22,7 +21,6 @@ Additionally, in order to make this an all-in-one package, the [Monodepth2 submo
     - This root directory is mounted into the container each time you bring it up via `docker compose up`, meaning any files you add on your host machine to this directory will _also_ be available within the container.
 
 ## Description
----
 
 A recent advance in underwater imaging is the Sea-Thru method, which uses a physical model of light attenuation to reconstruct
 the colors in an underwater scene. This method utilizes a known
